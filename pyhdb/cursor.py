@@ -183,29 +183,17 @@ class Cursor(object):
         parameters = prepared_statement.prepare_parameters(multi_row_parameters)
 
         while True:
+            parameters_part = Parameters(parameters)
             request = RequestMessage.new(
                 self.connection,
                 RequestSegment(
                     message_types.EXECUTE,
                     (StatementId(prepared_statement.statement_id),
-                     Parameters(parameters))
+                     parameters_part)
                 )
             )
             reply = self.connection.send_request(request)
-
-            parts = reply.segments[0].parts
-            function_code = reply.segments[0].function_code
-            if function_code == function_codes.SELECT:
-                self._handle_select(parts, prepared_statement.result_metadata_part)
-            elif function_code in function_codes.DML:
-                self._handle_upsert(parts, request.segments[0].parts[1].unwritten_lobs)
-            elif function_code == function_codes.DDL:
-                # No additional handling is required
-                pass
-            elif function_code in (function_codes.DBPROCEDURECALL, function_codes.DBPROCEDURECALLWITHRESULT):
-                self._handle_dbproc_call(parts, prepared_statement._params_metadata) # resultset metadata set in prepare
-            else:
-                raise InterfaceError("Invalid or unsupported function code received: %d" % function_code)
+            self._handle_reply(reply, prepared_statement, parameters_part.unwritten_lobs)
 
             if not parameters:
                 break
@@ -225,20 +213,7 @@ class Cursor(object):
             )
         )
         reply = self.connection.send_request(request)
-
-        parts = reply.segments[0].parts
-        function_code = reply.segments[0].function_code
-        if function_code == function_codes.SELECT:
-            self._handle_select(parts)
-        elif function_code in function_codes.DML:
-            self._handle_upsert(parts)
-        elif function_code == function_codes.DDL:
-            # No additional handling is required
-            pass
-        elif function_code in (function_codes.DBPROCEDURECALL, function_codes.DBPROCEDURECALLWITHRESULT):
-            self._handle_dbproc_call(parts, None)
-        else:
-            raise InterfaceError("Invalid or unsupported function code received: %d" % function_code)
+        self._handle_reply(reply)
 
     def execute(self, statement, parameters=None):
         """Execute statement on database
@@ -294,6 +269,22 @@ class Cursor(object):
             self.execute_prepared(prepared_statement, parameters)
         # Return cursor object:
         return self
+
+    def _handle_reply(self, reply, prepared_statement=None, unwritten_lobs=()):
+        for segment in reply.segments:
+            if segment.function_code == function_codes.SELECT:
+                metadata = prepared_statement.result_metadata_part if prepared_statement is not None else None
+                self._handle_select(segment.parts, metadata)
+            elif segment.function_code in (function_codes.INSERT, function_codes.DML):
+                self._handle_upsert(segment.parts, unwritten_lobs)
+            elif segment.function_code == function_codes.DDL:
+                # No additional handling is required
+                pass
+            elif segment.function_code in (function_codes.DBPROCEDURECALL, function_codes.DBPROCEDURECALLWITHRESULT):
+                metadata = prepared_statement._params_metadata if prepared_statement is not None else None
+                self._handle_dbproc_call(segment.parts, metadata)
+            else:
+                raise InterfaceError("Invalid or unsupported function code received: %d" % segment.function_code)
 
     def _handle_upsert(self, parts, unwritten_lobs=()):
         """Handle reply messages from INSERT or UPDATE statements"""
