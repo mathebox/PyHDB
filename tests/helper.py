@@ -48,25 +48,38 @@ def create_table_fixture(request, connection, table, table_fields, column_table=
         cursor.execute('DROP table "%s"' % table)
     request.addfinalizer(_close)
 
-@pytest.fixture
-def procedure_with_result_fixture(request, connection):
+
+def create_procedure_fixture(request, connection, create_proc_sql):
     cursor = connection.cursor()
-    # create temporary procedure
-    try:
-        cursor.execute("""CREATE PROCEDURE PYHDB_PROC_WITH_RESULT (OUT OUTVAR INTEGER) 
-            AS
-            BEGIN 
-              SELECT 2015 INTO OUTVAR FROM DUMMY;
-            END""")
-    except:
-        # procedure probably already existed
-        pass
+    procedure_name = create_proc_sql.split(' ')[2].split('(')[0]
 
-    def _close():
-        try:
-            cursor.execute("""DROP PROCEDURE PYHDB_PROC_WITH_RESULT""")
-        except:
-            # procedure didnt exist
-            pass
+    if not procedure_name.upper().startswith("PYHDB_"):
+        raise Exception(
+            "Unable to create procedure fixture "
+            "(The procdure name should start with 'PYHDB_')"
+        )
 
-    request.addfinalizer(_close)
+    def _drop_procedure_if_exists():
+        proc_exists_sql = """
+SELECT 1
+FROM SYS.P_PROCEDURES_
+WHERE SCHEMA='SYSTEM' AND NAME='%s'""" % procedure_name
+        drop_proc_sql = """
+DROP PROCEDURE %s""" % procedure_name
+
+        cursor.execute(proc_exists_sql)
+        proc_exists = cursor.fetchone() is not None
+
+        if proc_exists:
+            if not procedure_name.upper().startswith("PYHDB_"):
+                raise Exception(
+                    "Unable to drop procedure fixture (It is only safe "
+                    "to delete procedures whose name start with 'PYHDB_' "
+                    "in schema 'SYSTEM')"
+                )
+            cursor.execute(drop_proc_sql)
+
+    _drop_procedure_if_exists()
+    cursor.execute(create_proc_sql)
+
+    request.addfinalizer(_drop_procedure_if_exists)

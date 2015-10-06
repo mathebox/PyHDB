@@ -202,11 +202,11 @@ def test_received_last_resultset_part_resets_after_execute(connection):
 
     cursor.execute("SELECT 1 FROM DUMMY")
     # Result is very small we got everything direct into buffer
-    assert cursor._received_last_resultset_part
+    assert cursor._resultset_closed
 
     cursor.execute("SELECT VIEW_NAME FROM PUBLIC.VIEWS")
     # Result is not small enouth for single resultset part
-    assert not cursor._received_last_resultset_part
+    assert not cursor._resultset_closed
 
 
 @pytest.mark.hanatest
@@ -235,10 +235,10 @@ def test_execute_raises_error_after_close(connection):
 @pytest.mark.hanatest
 def test_cursor_description_after_execution(connection):
     cursor = connection.cursor()
-    assert cursor.description is None
+    assert cursor.descriptions == {}
 
     cursor.execute("SELECT 'Hello World' AS TEST FROM DUMMY")
-    assert cursor.description == ((u'TEST', 9, None, 11, 0, None, 0),)
+    assert ((u'TEST', 9, None, 11, 0, None, 0),) in cursor.descriptions.values()
 
 
 @pytest.mark.hanatest
@@ -273,3 +273,11 @@ def test_cursor_executemany_hana_expansion(connection, test_table_1):
     cursor.execute("SELECT * FROM %s" % TABLE)
     result = cursor.fetchall()
     assert result == [('Statement 1',), ('Statement 2',)]
+
+
+@pytest.mark.hanatest
+def test_cursor_executemany_nothing(connection, test_table_1):
+    cursor = connection.cursor()
+
+    with pytest.raises(ProgrammingError):
+        cursor.executemany("INSERT INTO %s VALUES(:1)" % TABLE, [[]])
