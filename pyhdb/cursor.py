@@ -18,7 +18,7 @@ from pyhdb.protocol.message import RequestMessage
 from pyhdb.protocol.segments import RequestSegment
 from pyhdb.protocol.types import escape_values, by_type_code
 from pyhdb.protocol.parts import Command, FetchSize, ResultSetId, StatementId, Parameters, WriteLobRequest
-from pyhdb.protocol.constants import message_types, function_codes, part_kinds
+from pyhdb.protocol.constants import message_types, function_codes, part_kinds, io_types, part_attributes
 from pyhdb.exceptions import ProgrammingError, InterfaceError, DatabaseError
 from pyhdb.compat import izip
 
@@ -93,10 +93,11 @@ class PreparedStatement(object):
             raise ProgrammingError("Prepared statement parameters supplied as %s, shall be list, tuple or dict." %
                                    type(parameters).__name__)
 
-        if len(parameters) != len(self._params_metadata):
+        input_params_metadata = filter(io_types.isInputParameter, self._params_metadata)
+        if len(parameters) != len(input_params_metadata):
             raise ProgrammingError("Prepared statement parameters expected %d supplied %d." %
-                                   (len(self._params_metadata), len(parameters)))
-        row_params = [self.ParamTuple(p.id, p.datatype, p.length, parameters[p.id]) for p in self._params_metadata]
+                                   (len(input_params_metadata), len(parameters)))
+        row_params = [self.ParamTuple(p.id, p.datatype, p.length, parameters[p.id]) for p in input_params_metadata]
         self._iter_row_count += 1
         return row_params
 
@@ -109,16 +110,26 @@ class Cursor(object):
     """Database cursor class"""
     def __init__(self, connection):
         self.connection = connection
-        self._buffer = iter([])
-        self._received_last_resultset_part = False
-        self._executed = None
-
         self.rowcount = -1
-        self._column_types = None
-        self.description = None
         self.rownumber = None
         self.arraysize = 1
         self._prepared_statements = {}
+        self._reset()
+
+    def _reset(self):
+        self._output_param_buffer = None
+        self._buffer = {}
+        self._resultset_closed = False
+        self._executed = None
+
+        self._resultset_ids = []
+        self._column_types = {}
+        self.descriptions = {}
+
+        self._cached_resultset_metadata = None
+        self._cached_resultset_id = None
+        self._last_resultset_id = None
+        self._current_resultset_id = None
 
     @property
     def prepared_statement_ids(self):
@@ -133,7 +144,6 @@ class Cursor(object):
         :returns: statement_id (of prepared and cached statement)
         """
         self._check_closed()
-        self._column_types = None
         statement_id = params_metadata = result_metadata_part = None
 
         request = RequestMessage.new(
@@ -179,46 +189,40 @@ class Cursor(object):
         response = self.connection.send_request(request)
         del self._prepared_statements[statement_id]
 
-    def execute_prepared(self, prepared_statement, multi_row_parameters):
+    def execute_prepared(self, prepared_statement, multi_row_parameters=[]):
         """
         :param prepared_statement: A PreparedStatement instance
         :param multi_row_parameters: A list/tuple containing list/tuples of parameters (for multiple rows)
         """
         self._check_closed()
+        self._reset()
 
         # Convert parameters into a generator producing lists with parameters as named tuples (incl. some meta data):
         parameters = prepared_statement.prepare_parameters(multi_row_parameters)
 
-        while parameters:
+        while True:
+            parameters_part = Parameters(parameters)
             request = RequestMessage.new(
                 self.connection,
                 RequestSegment(
                     message_types.EXECUTE,
                     (StatementId(prepared_statement.statement_id),
-                     Parameters(parameters))
+                     parameters_part)
                 )
             )
             reply = self.connection.send_request(request)
+            self._handle_reply(reply, prepared_statement, parameters_part.unwritten_lobs)
 
-            parts = reply.segments[0].parts
-            function_code = reply.segments[0].function_code
-            if function_code == function_codes.SELECT:
-                self._handle_select(parts, prepared_statement.result_metadata_part)
-            elif function_code in function_codes.DML:
-                self._handle_upsert(parts, request.segments[0].parts[1].unwritten_lobs)
-            elif function_code == function_codes.DDL:
-                # No additional handling is required
-                pass
-            elif function_code in (function_codes.DBPROCEDURECALL, function_codes.DBPROCEDURECALLWITHRESULT):
-                self._handle_dbproc_call(parts, prepared_statement._params_metadata) # resultset metadata set in prepare
-            else:
-                raise InterfaceError("Invalid or unsupported function code received: %d" % function_code)
+            if not parameters:
+                break
 
     def _execute_direct(self, operation):
         """Execute statements which are not going through 'prepare_statement' (aka 'direct execution').
         Either their have no parameters, or Python's string expansion has been applied to the SQL statement.
         :param operation:
         """
+        self._reset()
+
         request = RequestMessage.new(
             self.connection,
             RequestSegment(
@@ -227,20 +231,7 @@ class Cursor(object):
             )
         )
         reply = self.connection.send_request(request)
-
-        parts = reply.segments[0].parts
-        function_code = reply.segments[0].function_code
-        if function_code == function_codes.SELECT:
-            self._handle_select(parts)
-        elif function_code in function_codes.DML:
-            self._handle_upsert(parts)
-        elif function_code == function_codes.DDL:
-            # No additional handling is required
-            pass
-        elif function_code in (function_codes.DBPROCEDURECALL, function_codes.DBPROCEDURECALLWITHRESULT):
-            self._handle_dbproc_call(parts, None)
-        else:
-            raise InterfaceError("Invalid or unsupported function code received: %d" % function_code)
+        self._handle_reply(reply)
 
     def execute(self, statement, parameters=None):
         """Execute statement on database
@@ -298,11 +289,24 @@ class Cursor(object):
         # Return cursor object:
         return self
 
+    def _handle_reply(self, reply, prepared_statement=None, unwritten_lobs=()):
+        for segment in reply.segments:
+            if segment.function_code == function_codes.SELECT:
+                metadata = prepared_statement.result_metadata_part if prepared_statement is not None else None
+                self._handle_select(segment.parts, metadata)
+            elif segment.function_code in (function_codes.INSERT, function_codes.DML):
+                self._handle_upsert(segment.parts, unwritten_lobs)
+            elif segment.function_code == function_codes.DDL:
+                # No additional handling is required
+                pass
+            elif segment.function_code in (function_codes.DBPROCEDURECALL, function_codes.DBPROCEDURECALLWITHRESULT):
+                metadata = prepared_statement._params_metadata if prepared_statement is not None else None
+                self._handle_dbproc_call(segment.parts, metadata)
+            else:
+                raise InterfaceError("Invalid or unsupported function code received: %d" % segment.function_code)
+
     def _handle_upsert(self, parts, unwritten_lobs=()):
         """Handle reply messages from INSERT or UPDATE statements"""
-        self.description = None
-        self._received_last_resultset_part = True  # set to 'True' so that cursor.fetch*() returns just empty list
-
         for part in parts:
             if part.kind == part_kinds.ROWSAFFECTED:
                 self.rowcount = part.values[0]
@@ -338,29 +342,48 @@ class Cursor(object):
             )
             self.connection.send_request(request)
 
+    def _stored_resultset_id_metadata_if_possible(self):
+        if self._cached_resultset_metadata is None or self._cached_resultset_id is None:
+            return
+
+        self._resultset_ids.append(self._cached_resultset_id)
+        if self._current_resultset_id is None:
+            self._current_resultset_id = self._cached_resultset_id
+        description, column_types = self._handle_result_metadata(self._cached_resultset_metadata)
+        self.descriptions[self._cached_resultset_id] = description
+        self._column_types[self._cached_resultset_id] = column_types
+        # reset
+        self._cached_resultset_metadata = None
+        self._cached_resultset_id = None
+
     def _handle_select(self, parts, result_metadata=None):
         """Handle reply messages from SELECT statements"""
         self.rowcount = -1
         if result_metadata is not None:
             # Select was prepared and we can use the already received metadata
-            self.description, self._column_types = self._handle_result_metadata(result_metadata)
-
+            self._cached_resultset_metadata = result_metadata
+            self._stored_resultset_id_metadata_if_possible()
         for part in parts:
             if part.kind == part_kinds.RESULTSETID:
-                self._resultset_id = part.value
+                self._last_resultset_id = part.value
+                self._cached_resultset_id = part.value
+                self._stored_resultset_id_metadata_if_possible()
             elif part.kind == part_kinds.RESULTSETMETADATA:
-                self.description, self._column_types = self._handle_result_metadata(part)
+                description, column_types = self._handle_result_metadata(part)
+                self._cached_resultset_metadata = part
+                self._stored_resultset_id_metadata_if_possible()
             elif part.kind == part_kinds.RESULTSET:
-                self._buffer = part.unpack_rows(self._column_types, self.connection)
-                self._received_last_resultset_part = part.attribute & 1
-                self._executed = True
+                self._buffer[self._last_resultset_id] = part.unpack_rows(self._column_types[self._last_resultset_id], self.connection)
+                self._resultset_closed = (part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
             elif part.kind in (part_kinds.STATEMENTCONTEXT, part_kinds.TRANSACTIONFLAGS):
                 pass
             else:
                 raise InterfaceError("Prepared select statement response, unexpected part kind %d." % part.kind)
+        self._executed = True
 
     def _handle_dbproc_call(self, parts, parameters_metadata):
         """Handle reply messages from STORED PROCEDURE statements"""
+
         for part in parts:
             if part.kind == part_kinds.ROWSAFFECTED:
                 self.rowcount = part.values[0]
@@ -369,17 +392,17 @@ class Cursor(object):
             elif part.kind == part_kinds.STATEMENTCONTEXT:
                 pass
             elif part.kind == part_kinds.OUTPUTPARAMETERS:
-                self._buffer = part.unpack_rows(parameters_metadata, self.connection)
-                self._received_last_resultset_part = True
-                self._executed = True
+                self._output_param_buffer = part.unpack_rows(parameters_metadata, self.connection)
             elif part.kind == part_kinds.RESULTSETMETADATA:
-                self.description, self._column_types = self._handle_result_metadata(part)
+                self._cached_resultset_metadata = part
+                self._stored_resultset_id_metadata_if_possible()
             elif part.kind == part_kinds.RESULTSETID:
-                self._resultset_id = part.value
+                self._last_resultset_id = part.value
+                self._cached_resultset_id = part.value
+                self._stored_resultset_id_metadata_if_possible()
             elif part.kind == part_kinds.RESULTSET:
-                self._buffer = part.unpack_rows(self._column_types, self.connection)
-                self._received_last_resultset_part = part.attribute & 1
-                self._executed = True
+                self._buffer[self._last_resultset_id] = part.unpack_rows(self._column_types[self._last_resultset_id], self.connection)
+                self._resultset_closed = (part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
             else:
                 raise InterfaceError("Stored procedure call, unexpected part kind %d." % part.kind)
         self._executed = True
@@ -396,6 +419,44 @@ class Cursor(object):
 
         return tuple(description), tuple(column_types)
 
+    def _output_params_available(self):
+        return self._output_param_buffer is not None
+
+    def nextset(self):
+        if self._output_param_buffer is not None:
+            self._output_param_buffer = None
+            if self._current_resultset_id is None:
+                return None
+            else:
+                return True
+        else:
+            next_resultset_idx = self._resultset_ids.index(self._current_resultset_id)+1
+            if next_resultset_idx < len(self._resultset_ids):
+                self._current_resultset_id = self._resultset_ids[next_resultset_idx]
+                return True
+            else:
+                return None
+
+    def _current_buffer(self, fetch_next, fetch_size):
+        # output parameters exist
+        if self._output_param_buffer is not None:
+            return self._output_param_buffer, True
+        # use existing buffer
+        if fetch_next or self._current_resultset_id not in self._buffer:
+            request = RequestMessage.new(
+                self.connection,
+                RequestSegment(
+                    message_types.FETCHNEXT,
+                    (ResultSetId(self._current_resultset_id), FetchSize(fetch_size))
+                )
+            )
+            response = self.connection.send_request(request)
+            # use _handle_select or _handle_dbproc here
+            resultset_part = response.segments[0].parts[1]
+            self._resultset_closed = (resultset_part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
+            self._buffer[self._current_resultset_id] = resultset_part.unpack_rows(self._column_types[self._current_resultset_id], self.connection)
+        return self._buffer[self._current_resultset_id], False
+
     def fetchmany(self, size=None):
         """Fetch many rows from select result set.
         :param size: Number of rows to return.
@@ -409,30 +470,20 @@ class Cursor(object):
 
         result = []
         cnt = 0
-        while cnt != size:
-            try:
-                result.append(self._buffer.next())
+        cnt_round = None
+
+        while cnt < size:
+            fetch_next = (cnt_round == 0)
+            cnt_round = 0
+            buffer, is_output_params = self._current_buffer(fetch_next, size-cnt)
+            for row in buffer:
+                if cnt >= size:
+                    break
+                result.append(row)
                 cnt += 1
-            except StopIteration:
+                cnt_round += 1
+            if is_output_params or cnt == size or self._resultset_closed:
                 break
-
-        if cnt == size or self._received_last_resultset_part:
-            # No rows are missing or there are no additional rows
-            return result
-
-        request = RequestMessage.new(
-            self.connection,
-            RequestSegment(
-                message_types.FETCHNEXT,
-                (ResultSetId(self._resultset_id), FetchSize(size - cnt))
-            )
-        )
-        response = self.connection.send_request(request)
-
-        resultset_part = response.segments[0].parts[1]
-        if resultset_part.attribute & 1:
-            self._received_last_resultset_part = True
-        result.extend(resultset_part.unpack_rows(self._column_types, self.connection))
         return result
 
     def fetchone(self):
@@ -451,7 +502,7 @@ class Cursor(object):
         :returns: list of row tuples
         """
         result = r = self.fetchmany(size=self.FETCHALL_BLOCKSIZE)
-        while len(r) == self.FETCHALL_BLOCKSIZE or not self._received_last_resultset_part:
+        while not self._resultset_closed:
             r = self.fetchmany(size=self.FETCHALL_BLOCKSIZE)
             result.extend(r)
         return result
