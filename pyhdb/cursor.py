@@ -18,7 +18,7 @@ from pyhdb.protocol.message import RequestMessage
 from pyhdb.protocol.segments import RequestSegment
 from pyhdb.protocol.types import escape_values, by_type_code
 from pyhdb.protocol.parts import Command, FetchSize, ResultSetId, StatementId, Parameters, WriteLobRequest
-from pyhdb.protocol.constants import message_types, function_codes, part_kinds
+from pyhdb.protocol.constants import message_types, function_codes, part_kinds, io_types
 from pyhdb.exceptions import ProgrammingError, InterfaceError, DatabaseError
 from pyhdb.compat import izip
 
@@ -93,10 +93,11 @@ class PreparedStatement(object):
             raise ProgrammingError("Prepared statement parameters supplied as %s, shall be list, tuple or dict." %
                                    type(parameters).__name__)
 
-        if len(parameters) != len(self._params_metadata):
+        input_params_metadata = filter(io_types.isInputParameter, self._params_metadata)
+        if len(parameters) != len(input_params_metadata):
             raise ProgrammingError("Prepared statement parameters expected %d supplied %d." %
-                                   (len(self._params_metadata), len(parameters)))
-        row_params = [self.ParamTuple(p.id, p.datatype, p.length, parameters[p.id]) for p in self._params_metadata]
+                                   (len(input_params_metadata), len(parameters)))
+        row_params = [self.ParamTuple(p.id, p.datatype, p.length, parameters[p.id]) for p in input_params_metadata]
         self._iter_row_count += 1
         return row_params
 
