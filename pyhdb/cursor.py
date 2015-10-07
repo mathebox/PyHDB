@@ -171,13 +171,16 @@ class Cursor(object):
                                                                     params_metadata, result_metadata_part)
         return statement_id
 
-    def execute_prepared(self, prepared_statement, multi_row_parameters=[]):
+    def execute_prepared(self, prepared_statement, multi_row_parameters=None):
         """
         :param prepared_statement: A PreparedStatement instance
         :param multi_row_parameters: A list/tuple containing list/tuples of parameters (for multiple rows)
         """
         self._check_closed()
         self._reset()
+
+        if multi_row_parameters is None:
+            multi_row_parameters = [[]]
 
         # Convert parameters into a generator producing lists with parameters as named tuples (incl. some meta data):
         parameters = prepared_statement.prepare_parameters(multi_row_parameters)
@@ -270,7 +273,9 @@ class Cursor(object):
         # Return cursor object:
         return self
 
-    def _handle_reply(self, reply, prepared_statement=None, unwritten_lobs=()):
+    def _handle_reply(self, reply, prepared_statement=None, unwritten_lobs=None):
+        if unwritten_lobs is None:
+            unwritten_lobs = ()
         for segment in reply.segments:
             if segment.function_code == function_codes.SELECT:
                 metadata = prepared_statement.result_metadata_part if prepared_statement is not None else None
@@ -286,7 +291,7 @@ class Cursor(object):
             else:
                 raise InterfaceError("Invalid or unsupported function code received: %d" % segment.function_code)
 
-    def _handle_upsert(self, parts, unwritten_lobs=()):
+    def _handle_upsert(self, parts, unwritten_lobs):
         """Handle reply messages from INSERT or UPDATE statements"""
         for part in parts:
             if part.kind == part_kinds.ROWSAFFECTED:
@@ -399,9 +404,6 @@ class Cursor(object):
             column_types.append(by_type_code[column[1]])
 
         return tuple(description), tuple(column_types)
-
-    def _output_params_available(self):
-        return self._output_param_buffer is not None
 
     def nextset(self):
         if self._output_param_buffer is not None:
