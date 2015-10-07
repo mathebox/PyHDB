@@ -30,7 +30,8 @@ from pyhdb.protocol.types import by_type_code
 from pyhdb.exceptions import InterfaceError, DatabaseError, DataError
 from pyhdb.compat import is_text, iter_range, with_metaclass, string_types
 from pyhdb.protocol.headers import ReadLobHeader, PartHeader, WriteLobHeader
-from pyhdb.protocol.constants import parameter_direction
+from pyhdb.protocol.constants import io_types
+
 
 recv_log = logging.getLogger('receive')
 debug = recv_log.debug
@@ -230,7 +231,7 @@ class OutputParameters(Part):
         values = []
         for param in parameters_metadata:
             # Unpack OUT or INOUT parameters' values
-            if param.iotype != parameter_direction.IN:
+            if io_types.is_output_parameter(param):
                 values.append( by_type_code[param.datatype].from_resultset(self.payload) )
         yield tuple(values)
 

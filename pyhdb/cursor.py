@@ -93,7 +93,7 @@ class PreparedStatement(object):
             raise ProgrammingError("Prepared statement parameters supplied as %s, shall be list, tuple or dict." %
                                    type(parameters).__name__)
 
-        input_params_metadata = filter(io_types.isInputParameter, self._params_metadata)
+        input_params_metadata = filter(io_types.is_input_parameter, self._params_metadata)
         if len(parameters) != len(input_params_metadata):
             raise ProgrammingError("Prepared statement parameters expected %d supplied %d." %
                                    (len(input_params_metadata), len(parameters)))
