@@ -94,9 +94,16 @@ class PreparedStatement(object):
                                    type(parameters).__name__)
 
         input_params_metadata = filter(io_types.is_input_parameter, self._params_metadata)
-        if len(parameters) != len(input_params_metadata):
-            raise ProgrammingError("Prepared statement parameters expected %d supplied %d." %
-                                   (len(input_params_metadata), len(parameters)))
+        if isinstance(parameters, dict):
+            ids_contained = [meta.id in parameters for meta in input_params_metadata]
+            if not all(ids_contained):
+                missing_ids = [meta.id for meta in input_params_metadata if meta.id not in parameters ]
+                raise ProgrammingError("Prepared statement parameters misses values for: %s" %
+                                       ', '.join(missing_ids))
+        else:
+            if len(parameters) != len(input_params_metadata):
+                raise ProgrammingError("Prepared statement parameters expected %d supplied %d." %
+                                       (len(input_params_metadata), len(parameters)))
         row_params = [self.ParamTuple(p.id, p.datatype, p.length, parameters[p.id]) for p in input_params_metadata]
         self._iter_row_count += 1
         return row_params

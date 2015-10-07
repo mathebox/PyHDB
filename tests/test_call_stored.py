@@ -17,6 +17,7 @@
 import pytest
 from random import randint
 
+from pyhdb.exceptions import ProgrammingError
 import tests.helper as helper
 
 # #############################################################################################################
@@ -207,6 +208,45 @@ def test_proc_in_and_out(connection, procedure_in_out_fixture):
     assert result[0] == a+b
 
     assert cursor.nextset() is None
+
+
+@pytest.mark.hanatest
+def test_proc_in_and_out_one_parameter_missing(connection, procedure_in_out_fixture):
+    cursor = connection.cursor()
+    # prepare call
+    sql_to_prepare = 'CALL PYHDB_PROC_IN_OUT (?, ?, ?)'
+    a = randint(0, 1000)
+    params = {'A': a}
+    psid = cursor.prepare(sql_to_prepare)
+    # execute prepared statement
+    ps = cursor.get_prepared_statement(psid)
+    with pytest.raises(ProgrammingError):
+        cursor.execute_prepared(ps, [params])
+
+
+@pytest.mark.hanatest
+def test_proc_in_and_out_all_parameters_missing(connection, procedure_in_out_fixture):
+    cursor = connection.cursor()
+    # prepare call
+    sql_to_prepare = 'CALL PYHDB_PROC_IN_OUT (?, ?, ?)'
+    params = {}
+    psid = cursor.prepare(sql_to_prepare)
+    # execute prepared statement
+    ps = cursor.get_prepared_statement(psid)
+    with pytest.raises(ProgrammingError):
+        cursor.execute_prepared(ps, [params])
+
+
+@pytest.mark.hanatest
+def test_proc_in_and_out_parameter_none(connection, procedure_in_out_fixture):
+    cursor = connection.cursor()
+    # prepare call
+    sql_to_prepare = 'CALL PYHDB_PROC_IN_OUT (?, ?, ?)'
+    psid = cursor.prepare(sql_to_prepare)
+    # execute prepared statement
+    ps = cursor.get_prepared_statement(psid)
+    with pytest.raises(ProgrammingError):
+        cursor.execute_prepared(ps)
 
 
 @pytest.mark.hanatest
