@@ -93,10 +93,17 @@ class PreparedStatement(object):
             raise ProgrammingError("Prepared statement parameters supplied as %s, shall be list, tuple or dict." %
                                    type(parameters).__name__)
 
-        input_params_metadata = filter(io_types.isInputParameter, self._params_metadata)
-        if len(parameters) != len(input_params_metadata):
-            raise ProgrammingError("Prepared statement parameters expected %d supplied %d." %
-                                   (len(input_params_metadata), len(parameters)))
+        input_params_metadata = filter(io_types.is_input_parameter, self._params_metadata)
+        if isinstance(parameters, dict):
+            ids_contained = [meta.id in parameters for meta in input_params_metadata]
+            if not all(ids_contained):
+                missing_ids = [meta.id for meta in input_params_metadata if meta.id not in parameters ]
+                raise ProgrammingError("Prepared statement parameters misses values for: %s" %
+                                       ', '.join(missing_ids))
+        else:
+            if len(parameters) != len(input_params_metadata):
+                raise ProgrammingError("Prepared statement parameters expected %d supplied %d." %
+                                       (len(input_params_metadata), len(parameters)))
         row_params = [self.ParamTuple(p.id, p.datatype, p.length, parameters[p.id]) for p in input_params_metadata]
         self._iter_row_count += 1
         return row_params
@@ -189,13 +196,16 @@ class Cursor(object):
         response = self.connection.send_request(request)
         del self._prepared_statements[statement_id]
 
-    def execute_prepared(self, prepared_statement, multi_row_parameters=[]):
+    def execute_prepared(self, prepared_statement, multi_row_parameters=None):
         """
         :param prepared_statement: A PreparedStatement instance
         :param multi_row_parameters: A list/tuple containing list/tuples of parameters (for multiple rows)
         """
         self._check_closed()
         self._reset()
+
+        if multi_row_parameters is None:
+            multi_row_parameters = [[]]
 
         # Convert parameters into a generator producing lists with parameters as named tuples (incl. some meta data):
         parameters = prepared_statement.prepare_parameters(multi_row_parameters)
@@ -289,7 +299,52 @@ class Cursor(object):
         # Return cursor object:
         return self
 
-    def _handle_reply(self, reply, prepared_statement=None, unwritten_lobs=()):
+    def callproc(self, procedure_name, parameters=None):
+        if parameters is None:
+            parameters = {}
+
+        procedure_name_parts = procedure_name.split('.')
+        if len(procedure_name_parts) == 1:
+            schema_name_part = 'current_schema'
+            procedure_name_part = procedure_name
+        elif len(procedure_name_parts) == 2:
+            schema_name_part = "'%s'" % procedure_name_parts[0]
+            procedure_name_part = procedure_name_parts[1]
+        else:
+            raise ProgrammingError("Invalid name for stored procedure: '%s'" %
+                                   procedure_name)
+
+        param_count_sql = """
+SELECT num_input_params, num_inout_params, num_output_params
+FROM SYS.P_PROCEDURES_
+WHERE schema=%s and name='%s'
+        """
+        self.execute(param_count_sql % (schema_name_part, procedure_name_part))
+        param_count_result = self.fetchone()
+        if param_count_result is None:
+            raise DatabaseError("Stored procedure '%s' does not exist" %
+                                procedure_name)
+        param_count = sum(param_count_result)
+
+        placeholders = '(%s)' % ','.join(['?']*param_count)
+        sql_to_prepare = 'CALL %s %s' % (procedure_name, placeholders)
+        psid = self.prepare(sql_to_prepare)
+        ps = self.get_prepared_statement(psid)
+        params_metadata = ps._params_metadata
+        self.execute_prepared(ps, [parameters])
+
+        output_parameters = parameters.copy()
+        if self._output_param_buffer is not None:
+            output = self.fetchone()
+            output_parameter = filter(io_types.is_output_parameter, params_metadata)
+            for i, param_id in enumerate([p.id for p in output_parameter]):
+                output_parameters[param_id] = output[i]
+            self.nextset()
+        return output_parameters
+
+    def _handle_reply(self, reply, prepared_statement=None, unwritten_lobs=None):
+        if unwritten_lobs is None:
+            unwritten_lobs = ()
         for segment in reply.segments:
             if segment.function_code == function_codes.SELECT:
                 metadata = prepared_statement.result_metadata_part if prepared_statement is not None else None
@@ -305,7 +360,7 @@ class Cursor(object):
             else:
                 raise InterfaceError("Invalid or unsupported function code received: %d" % segment.function_code)
 
-    def _handle_upsert(self, parts, unwritten_lobs=()):
+    def _handle_upsert(self, parts, unwritten_lobs):
         """Handle reply messages from INSERT or UPDATE statements"""
         for part in parts:
             if part.kind == part_kinds.ROWSAFFECTED:
@@ -419,9 +474,6 @@ class Cursor(object):
 
         return tuple(description), tuple(column_types)
 
-    def _output_params_available(self):
-        return self._output_param_buffer is not None
-
     def nextset(self):
         if self._output_param_buffer is not None:
             self._output_param_buffer = None
@@ -430,6 +482,8 @@ class Cursor(object):
             else:
                 return True
         else:
+            if self._current_resultset_id is None:
+                return None
             next_resultset_idx = self._resultset_ids.index(self._current_resultset_id)+1
             if next_resultset_idx < len(self._resultset_ids):
                 self._current_resultset_id = self._resultset_ids[next_resultset_idx]

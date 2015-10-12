@@ -19,9 +19,9 @@ IN_OUT = 2
 OUTPUT = 4
 
 
-def isInputParameter(param):
+def is_input_parameter(param):
     return param.iotype in (INPUT, IN_OUT)
 
 
-def isOutputParameter(param):
+def is_output_parameter(param):
     return param.iotype in (OUTPUT, IN_OUT)
