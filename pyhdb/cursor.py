@@ -280,6 +280,49 @@ class Cursor(object):
         # Return cursor object:
         return self
 
+    def callproc(self, procedure_name, parameters=None):
+        if parameters is None:
+            parameters = {}
+
+        procedure_name_parts = procedure_name.split('.')
+        if len(procedure_name_parts) == 1:
+            schema_name_part = 'current_schema'
+            procedure_name_part = procedure_name
+        elif len(procedure_name_parts) == 2:
+            schema_name_part = "'%s'" % procedure_name_parts[0]
+            procedure_name_part = procedure_name_parts[1]
+        else:
+            raise ProgrammingError("Invalid name for stored procedure: '%s'" %
+                                   procedure_name)
+
+        param_count_sql = """
+SELECT num_input_params, num_inout_params, num_output_params
+FROM SYS.P_PROCEDURES_
+WHERE schema=%s and name='%s'
+        """
+        self.execute(param_count_sql % (schema_name_part, procedure_name_part))
+        param_count_result = self.fetchone()
+        if param_count_result is None:
+            raise DatabaseError("Stored procedure '%s' does not exist" %
+                                procedure_name)
+        param_count = sum(param_count_result)
+
+        placeholders = '(%s)' % ','.join(['?']*param_count)
+        sql_to_prepare = 'CALL %s %s' % (procedure_name, placeholders)
+        psid = self.prepare(sql_to_prepare)
+        ps = self.get_prepared_statement(psid)
+        params_metadata = ps._params_metadata
+        self.execute_prepared(ps, [parameters])
+
+        output_parameters = parameters.copy()
+        if self._output_param_buffer is not None:
+            output = self.fetchone()
+            output_parameter = filter(io_types.is_output_parameter, params_metadata)
+            for i, param_id in enumerate([p.id for p in output_parameter]):
+                output_parameters[param_id] = output[i]
+            self.nextset()
+        return output_parameters
+
     def _handle_reply(self, reply, prepared_statement=None, unwritten_lobs=None):
         if unwritten_lobs is None:
             unwritten_lobs = ()
@@ -420,6 +463,8 @@ class Cursor(object):
             else:
                 return True
         else:
+            if self._current_resultset_id is None:
+                return None
             next_resultset_idx = self._resultset_ids.index(self._current_resultset_id)+1
             if next_resultset_idx < len(self._resultset_ids):
                 self._current_resultset_id = self._resultset_ids[next_resultset_idx]

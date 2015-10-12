@@ -62,11 +62,11 @@ END"""
 @pytest.fixture
 def procedure_out_fixture(request, connection):
     sql = """
-CREATE PROCEDURE PYHDB_PROC_OUT (OUT OUTVAR INTEGER)
+CREATE PROCEDURE PYHDB_PROC_OUT (OUT a INTEGER)
 LANGUAGE SQLSCRIPT
 READS SQL DATA AS
 BEGIN
-    outvar := 2015;
+    a := 2015;
 END"""
     helper.create_procedure_fixture(request, connection, sql)
 
@@ -144,13 +144,10 @@ END"""
 @pytest.mark.hanatest
 def test_proc_in(connection, procedure_in_table_fixture, procedure_in_fixture):
     cursor = connection.cursor()
-    # prepare call
-    psid = cursor.prepare("CALL PYHDB_PROC_IN (?)")
-    ps = cursor.get_prepared_statement(psid)
-    # execute prepared statement
     value = randint(0, 1000)
     params = {'A': value}
-    cursor.execute_prepared(ps, [params])
+    out_params = cursor.callproc('PYHDB_PROC_IN', params)
+    assert out_params == params
     # check updated table
     cursor.execute("SELECT TOP 1 col FROM PYHDB_PROC_IN_TABLE")
     # verify result
@@ -163,16 +160,11 @@ def test_proc_in(connection, procedure_in_table_fixture, procedure_in_fixture):
 @pytest.mark.hanatest
 def test_proc_in_out(connection, procedure_inout_fixture):
     cursor = connection.cursor()
-    # prepare call
-    psid = cursor.prepare("CALL PYHDB_PROC_INOUT (?)")
-    ps = cursor.get_prepared_statement(psid)
-    # execute prepared statement
     value = randint(0, 1000)
     params = {'A': value}
-    cursor.execute_prepared(ps, [params])
+    out_params = cursor.callproc('PYHDB_PROC_INOUT', params)
     # verify result
-    result = cursor.fetchone()
-    assert result[0] == value*2
+    assert out_params['A'] == params['A']*2
     assert cursor.nextset() is None
     cursor.close()
 
@@ -180,20 +172,27 @@ def test_proc_in_out(connection, procedure_inout_fixture):
 @pytest.mark.hanatest
 def test_proc_out(connection, procedure_out_fixture):
     cursor = connection.cursor()
-    # prepare call
-    psid = cursor.prepare("CALL PYHDB_PROC_OUT (?)")
-    ps = cursor.get_prepared_statement(psid)
-    # execute prepared statement
-    cursor.execute_prepared(ps)
+    out_params = cursor.callproc('PYHDB_PROC_OUT')
     # verify result
-    result = cursor.fetchone()
-    assert result[0] == 2015
+    assert out_params['A'] == 2015
     assert cursor.nextset() is None
     cursor.close()
 
 
 @pytest.mark.hanatest
 def test_proc_in_and_out(connection, procedure_in_out_fixture):
+    cursor = connection.cursor()
+    # prepare call
+    a, b = randint(0, 1000), randint(0, 1000)
+    params = {'A': a, 'B': b}
+    out_params = cursor.callproc('PYHDB_PROC_IN_OUT', params)
+    # verify result
+    assert out_params['C'] == a+b
+    assert cursor.nextset() is None
+
+
+@pytest.mark.hanatest
+def test_proc_old_style(connection, procedure_in_out_fixture):
     cursor = connection.cursor()
     # prepare call
     sql_to_prepare = 'CALL PYHDB_PROC_IN_OUT (?, ?, ?)'
@@ -213,52 +212,33 @@ def test_proc_in_and_out(connection, procedure_in_out_fixture):
 @pytest.mark.hanatest
 def test_proc_in_and_out_one_parameter_missing(connection, procedure_in_out_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_IN_OUT (?, ?, ?)'
     a = randint(0, 1000)
     params = {'A': a}
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
     with pytest.raises(ProgrammingError):
-        cursor.execute_prepared(ps, [params])
+        cursor.callproc('PYHDB_PROC_IN_OUT', params)
 
 
 @pytest.mark.hanatest
 def test_proc_in_and_out_all_parameters_missing(connection, procedure_in_out_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_IN_OUT (?, ?, ?)'
     params = {}
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
     with pytest.raises(ProgrammingError):
-        cursor.execute_prepared(ps, [params])
+        cursor.callproc('PYHDB_PROC_IN_OUT', params)
 
 
 @pytest.mark.hanatest
 def test_proc_in_and_out_parameter_none(connection, procedure_in_out_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_IN_OUT (?, ?, ?)'
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
     with pytest.raises(ProgrammingError):
-        cursor.execute_prepared(ps)
+        cursor.callproc('PYHDB_PROC_IN_OUT')
 
 
 @pytest.mark.hanatest
 def test_proc_table(connection, procedure_table_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_TABLE (?)'
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
-    cursor.execute_prepared(ps)
-    # verify result
+    out_params = cursor.callproc('PYHDB_PROC_TABLE')
+    # verify results
+    assert out_params == {}
     result = cursor.fetchone()
     assert result == (1, 2)
 
@@ -268,18 +248,10 @@ def test_proc_table(connection, procedure_table_fixture):
 @pytest.mark.hanatest
 def test_proc_out_table(connection, procedure_out_table_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_OUT_TABLE (?, ?)'
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
-    cursor.execute_prepared(ps)
+    out_params = cursor.callproc('PYHDB_PROC_OUT_TABLE')
     # verify result
-    result = cursor.fetchone()
-    assert result == (5,)
+    assert out_params['A'] == 5
 
-    assert cursor.nextset() == True
-    # verify result
     result = cursor.fetchone()
     assert result == (1, 2)
 
@@ -289,13 +261,10 @@ def test_proc_out_table(connection, procedure_out_table_fixture):
 @pytest.mark.hanatest
 def test_proc_2_tables(connection, procedure_2_tables_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_2_TABLES (?,?)'
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
-    cursor.execute_prepared(ps)
+    out_params = cursor.callproc('PYHDB_PROC_2_TABLES')
+
     # verify result
+    assert out_params == {}
     result = cursor.fetchone()
     assert result == (1, 2)
 
@@ -310,42 +279,19 @@ def test_proc_2_tables(connection, procedure_2_tables_fixture):
 @pytest.mark.hanatest
 def test_proc_3_tables(connection, procedure_3_tables_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_3_TABLES (?,?,?)'
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
-    cursor.execute_prepared(ps)
+    out_params = cursor.callproc('PYHDB_PROC_3_TABLES')
     # verify result
+    assert out_params == {}
     result = cursor.fetchone()
     assert result == (1, 2)
 
     assert cursor.nextset() == True
-     # verify result
     result = cursor.fetchone()
     assert result == (3, 4)
 
     assert cursor.nextset() == True
-    # verify result
     result = cursor.fetchone()
     assert result == (5, 6)
-
-    assert cursor.nextset() is None
-
-
-@pytest.mark.hanatest
-def test_proc_skip_output_params(connection, procedure_out_table_fixture):
-    cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_OUT_TABLE (?, ?)'
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
-    cursor.execute_prepared(ps)
-    assert cursor.nextset() == True
-    # verify result
-    result = cursor.fetchone()
-    assert result == (1, 2)
 
     assert cursor.nextset() is None
 
@@ -361,12 +307,10 @@ def test_proc_3_tables_skip_first(connection, procedure_3_tables_fixture):
     cursor.execute_prepared(ps)
 
     assert cursor.nextset() == True
-     # verify result
     result = cursor.fetchone()
     assert result == (3, 4)
 
     assert cursor.nextset() == True
-     # verify result
     result = cursor.fetchone()
     assert result == (5, 6)
 
@@ -376,12 +320,7 @@ def test_proc_3_tables_skip_first(connection, procedure_3_tables_fixture):
 @pytest.mark.hanatest
 def test_proc_3_tables_skip_middle(connection, procedure_3_tables_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_3_TABLES (?,?,?)'
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
-    cursor.execute_prepared(ps)
+    cursor.callproc('PYHDB_PROC_3_TABLES')
     # verify result
     result = cursor.fetchone()
     assert result == (1, 2)
@@ -398,12 +337,7 @@ def test_proc_3_tables_skip_middle(connection, procedure_3_tables_fixture):
 @pytest.mark.hanatest
 def test_proc_3_tables_skip_last(connection, procedure_3_tables_fixture):
     cursor = connection.cursor()
-    # prepare call
-    sql_to_prepare = 'CALL PYHDB_PROC_3_TABLES (?,?,?)'
-    psid = cursor.prepare(sql_to_prepare)
-    # execute prepared statement
-    ps = cursor.get_prepared_statement(psid)
-    cursor.execute_prepared(ps)
+    cursor.callproc('PYHDB_PROC_3_TABLES')
     # verify result
     result = cursor.fetchone()
     assert result == (1, 2)
