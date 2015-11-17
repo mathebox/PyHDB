@@ -210,7 +210,7 @@ class Cursor(object):
         # Convert parameters into a generator producing lists with parameters as named tuples (incl. some meta data):
         parameters = prepared_statement.prepare_parameters(multi_row_parameters)
 
-        while True:
+        while parameters:
             parameters_part = Parameters(parameters)
             request = RequestMessage.new(
                 self.connection,
@@ -222,9 +222,6 @@ class Cursor(object):
             )
             reply = self.connection.send_request(request)
             self._handle_reply(reply, prepared_statement, parameters_part.unwritten_lobs)
-
-            if not parameters:
-                break
 
     def _execute_direct(self, operation):
         """Execute statements which are not going through 'prepare_statement' (aka 'direct execution').
@@ -349,7 +346,7 @@ WHERE schema=%s and name='%s'
             if segment.function_code == function_codes.SELECT:
                 metadata = prepared_statement.result_metadata_part if prepared_statement is not None else None
                 self._handle_select(segment.parts, metadata)
-            elif segment.function_code in (function_codes.INSERT, function_codes.DML):
+            elif segment.function_code in function_codes.DML:
                 self._handle_upsert(segment.parts, unwritten_lobs)
             elif segment.function_code == function_codes.DDL:
                 # No additional handling is required
@@ -429,7 +426,7 @@ WHERE schema=%s and name='%s'
                 self._stored_resultset_id_metadata_if_possible()
             elif part.kind == part_kinds.RESULTSET:
                 self._buffer[self._last_resultset_id] = part.unpack_rows(self._column_types[self._last_resultset_id], self.connection)
-                self._resultset_closed = (part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
+                self._resultset_closed = part_attributes.is_resultset_closed(part.attribute)
             elif part.kind in (part_kinds.STATEMENTCONTEXT, part_kinds.TRANSACTIONFLAGS):
                 pass
             else:
@@ -457,7 +454,7 @@ WHERE schema=%s and name='%s'
                 self._stored_resultset_id_metadata_if_possible()
             elif part.kind == part_kinds.RESULTSET:
                 self._buffer[self._last_resultset_id] = part.unpack_rows(self._column_types[self._last_resultset_id], self.connection)
-                self._resultset_closed = (part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
+                self._resultset_closed = part_attributes.is_resultset_closed(part.attribute)
             else:
                 raise InterfaceError("Stored procedure call, unexpected part kind %d." % part.kind)
         self._executed = True
@@ -507,7 +504,7 @@ WHERE schema=%s and name='%s'
             response = self.connection.send_request(request)
             # use _handle_select or _handle_dbproc here
             resultset_part = response.segments[0].parts[1]
-            self._resultset_closed = (resultset_part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
+            self._resultset_closed = part_attributes.is_resultset_closed(resultset_part.attribute)
             self._buffer[self._current_resultset_id] = resultset_part.unpack_rows(self._column_types[self._current_resultset_id], self.connection)
         return self._buffer[self._current_resultset_id], False
 

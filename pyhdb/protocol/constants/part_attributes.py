@@ -14,8 +14,12 @@
 
 # Part Attributes
 
-LASTPACKET = 1<<0
-NEXTPACKET = 1<<1
-FIRSTPACKET = 1<<2
-ROWNOTFOUND = 1<<3
-RESULTSETCLOSED = 1<<4
+LASTPACKET = 1 << 0
+NEXTPACKET = 1 << 1
+FIRSTPACKET = 1 << 2
+ROWNOTFOUND = 1 << 3
+RESULTSETCLOSED = 1 << 4
+
+
+def is_resultset_closed(attribute):
+    return attribute & (LASTPACKET | RESULTSETCLOSED | ROWNOTFOUND)
