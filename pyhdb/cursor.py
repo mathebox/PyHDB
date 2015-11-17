@@ -192,7 +192,7 @@ class Cursor(object):
         # Convert parameters into a generator producing lists with parameters as named tuples (incl. some meta data):
         parameters = prepared_statement.prepare_parameters(multi_row_parameters)
 
-        while True:
+        while parameters:
             parameters_part = Parameters(parameters)
             request = RequestMessage.new(
                 self.connection,
@@ -204,9 +204,6 @@ class Cursor(object):
             )
             reply = self.connection.send_request(request)
             self._handle_reply(reply, prepared_statement, parameters_part.unwritten_lobs)
-
-            if not parameters:
-                break
 
     def _execute_direct(self, operation):
         """Execute statements which are not going through 'prepare_statement' (aka 'direct execution').
