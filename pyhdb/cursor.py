@@ -407,7 +407,7 @@ WHERE schema=%s and name='%s'
                 self._stored_resultset_id_metadata_if_possible()
             elif part.kind == part_kinds.RESULTSET:
                 self._buffer[self._last_resultset_id] = part.unpack_rows(self._column_types[self._last_resultset_id], self.connection)
-                self._resultset_closed = (part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
+                self._resultset_closed = part_attributes.is_resultset_closed(part.attribute)
             elif part.kind in (part_kinds.STATEMENTCONTEXT, part_kinds.TRANSACTIONFLAGS):
                 pass
             else:
@@ -435,7 +435,7 @@ WHERE schema=%s and name='%s'
                 self._stored_resultset_id_metadata_if_possible()
             elif part.kind == part_kinds.RESULTSET:
                 self._buffer[self._last_resultset_id] = part.unpack_rows(self._column_types[self._last_resultset_id], self.connection)
-                self._resultset_closed = (part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
+                self._resultset_closed = part_attributes.is_resultset_closed(part.attribute)
             else:
                 raise InterfaceError("Stored procedure call, unexpected part kind %d." % part.kind)
         self._executed = True
@@ -485,7 +485,7 @@ WHERE schema=%s and name='%s'
             response = self.connection.send_request(request)
             # use _handle_select or _handle_dbproc here
             resultset_part = response.segments[0].parts[1]
-            self._resultset_closed = (resultset_part.attribute & (part_attributes.RESULTSETCLOSED|part_attributes.ROWNOTFOUND))
+            self._resultset_closed = part_attributes.is_resultset_closed(resultset_part.attribute)
             self._buffer[self._current_resultset_id] = resultset_part.unpack_rows(self._column_types[self._current_resultset_id], self.connection)
         return self._buffer[self._current_resultset_id], False
 
