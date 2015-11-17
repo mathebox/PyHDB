@@ -327,7 +327,7 @@ WHERE schema=%s and name='%s'
             if segment.function_code == function_codes.SELECT:
                 metadata = prepared_statement.result_metadata_part if prepared_statement is not None else None
                 self._handle_select(segment.parts, metadata)
-            elif segment.function_code in (function_codes.INSERT, function_codes.DML):
+            elif segment.function_code in function_codes.DML:
                 self._handle_upsert(segment.parts, unwritten_lobs)
             elif segment.function_code == function_codes.DDL:
                 # No additional handling is required
