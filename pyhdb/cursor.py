@@ -81,10 +81,13 @@ class PreparedStatement(object):
     def __iter__(self):
         return self
 
-    def __nonzero__(self):
+    def __bool__(self):
         return self._iter_row_count < self._num_rows
 
-    def next(self):
+    # Python 2.7 compat
+    __nonzero__ = __bool__
+
+    def __next__(self):
         if self._iter_row_count == self._num_rows:
             raise StopIteration()
 
@@ -107,6 +110,9 @@ class PreparedStatement(object):
         row_params = [self.ParamTuple(p.id, p.datatype, p.length, parameters[p.id]) for p in input_params_metadata]
         self._iter_row_count += 1
         return row_params
+
+    # Python 2.7 compat
+    next = __next__
 
     def back(self):
         assert self._iter_row_count > 0, 'already stepped back to beginning of iterator data'
@@ -137,6 +143,7 @@ class Cursor(object):
         self._cached_resultset_id = None
         self._last_resultset_id = None
         self._current_resultset_id = None
+        self._last_statement_id_executemany = None
 
     @property
     def prepared_statement_ids(self):
@@ -195,6 +202,8 @@ class Cursor(object):
         )
         response = self.connection.send_request(request)
         del self._prepared_statements[statement_id]
+        if statement_id == self._last_statement_id_executemany:
+            self._last_statement_id_executemany = None
 
     def execute_prepared(self, prepared_statement, multi_row_parameters=None):
         """
@@ -292,7 +301,10 @@ class Cursor(object):
             # Continue with Hana style statement execution:
             prepared_statement = self.get_prepared_statement(statement_id)
             self.execute_prepared(prepared_statement, parameters)
-            self.drop_prepared(statement_id)
+            if self._last_statement_id_executemany is not None:
+                self.drop_prepared(self._last_statement_id_executemany)
+                self._last_statement_id_executemany = statement_id
+
         # Return cursor object:
         return self
 

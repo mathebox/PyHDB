@@ -84,7 +84,6 @@ def test_unpack_decimal(input, expected):
     input = BytesIO(input)
     assert types.Decimal.from_resultset(input) == expected
 
-
 @pytest.mark.parametrize("input,expected", [
     (Decimal('3.14159265359'), '3.14159265359'),
     (Decimal('-312313212312321.1245678910111213142'),
@@ -180,3 +179,15 @@ def test_pack_real(input, expected):
 ])
 def test_pack_double(input, expected):
     types.Double.prepare(input) == expected
+
+@pytest.mark.parametrize("input,expected", [
+    (None, b"\x00"),
+    (Decimal('-312313212312321.1245678910111213142'),
+     b"\x05\x56\xe6\x47\x6f\x0e\xde\xd6\x93\x68\xb0\x26\x78\xfb\x99\x1a\xb0"),
+    (Decimal('3.14159265359'),
+     b"\x05\x4f\xf6\x59\x25\x49\x00\x00\x00\x00\x00\x00\x00\x00\x00\x2a\x30"),
+    (Decimal("-15.756299999999999528199623455293476581573486328125"),
+     b"\x05\x03\xa0\x1d\x27\x14\xb4\xd7\xc3\x92\x8e\x1c\x3f\xaf\x4d\x00\xb0")
+])
+def test_pack_decimal(input, expected):
+    assert types.Decimal.prepare(input) == expected

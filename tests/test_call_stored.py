@@ -70,7 +70,6 @@ BEGIN
 END"""
     helper.create_procedure_fixture(request, connection, sql)
 
-
 @pytest.fixture
 def procedure_in_out_fixture(request, connection):
     sql = """
@@ -170,7 +169,7 @@ def test_proc_in_out(connection, procedure_inout_fixture):
 
 
 @pytest.mark.hanatest
-def test_proc_out(connection, procedure_out_fixture):
+def test_PROC_ADD2(connection, procedure_out_fixture):
     cursor = connection.cursor()
     out_params = cursor.callproc('PYHDB_PROC_OUT')
     # verify result
