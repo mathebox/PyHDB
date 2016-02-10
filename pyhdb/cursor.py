@@ -546,6 +546,8 @@ WHERE schema=%s and name='%s'
                 cnt += 1
                 cnt_round += 1
             if is_output_params or cnt == size or self._resultset_closed:
+                if len(self._buffer) == 0:
+                    self._resultset_closed = True
                 break
         return result
 
