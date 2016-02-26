@@ -139,6 +139,10 @@ class Cursor(object):
         self._current_resultset_id = None
 
     @property
+    def description(self):
+        return self.descriptions.get(self._current_resultset_id, [])
+
+    @property
     def prepared_statement_ids(self):
         return self._prepared_statements.keys()
 
