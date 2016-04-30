@@ -147,3 +147,6 @@ sftp-config.json
 
 # virtualfish
 .venv
+
+# helper directory
+helper/

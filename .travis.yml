@@ -11,6 +11,8 @@ before_install:
   - pip install pytest-cov
 install:
   - pip install -e .
+before_script:
+  - chmod +x ./pytest-hana.sh
 script:
-  - py.test -v --cov=pyhdb
+  - ./pytest-hana.sh
   - codecov

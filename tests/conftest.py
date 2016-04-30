@@ -16,6 +16,7 @@ from collections import namedtuple
 
 import pytest
 import pyhdb
+from time import sleep
 
 HANASystem = namedtuple(
     'HANASystem', ['host', 'port', 'user', 'password']
@@ -101,3 +102,5 @@ def pytest_runtest_setup(item):
             hana = hana_system()
             if hana.host is None:
                 pytest.skip("Test requires SAP HANA system")
+            else:
+                sleep(10)
